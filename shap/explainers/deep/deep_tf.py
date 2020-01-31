@@ -38,7 +38,7 @@ class TFDeepExplainer(Explainer):
     that this package does not currently use the reveal-cancel rule for ReLu units proposed in DeepLIFT.
     """
 
-    def __init__(self, model, data, session=None, learning_phase_flags=None):
+    def __init__(self, model, data, session=None, learning_phase_flags=None, additional_feed_dict = None):
         """ An explainer object for a deep model using a given background dataset.
 
         Note that the complexity of the method scales linearly with the number of background data
@@ -112,6 +112,7 @@ class TFDeepExplainer(Explainer):
         if type(data) != list and (hasattr(data, '__call__')==False):
             data = [data]
         self.data = data
+        self.additional_feed_dict = additional_feed_dict
         
         self._vinputs = {} # used to track what op inputs depends on the model inputs
         self.orig_grads = {}
@@ -142,7 +143,8 @@ class TFDeepExplainer(Explainer):
             if self.data[0].shape[0] > 5000:
                 warnings.warn("You have provided over 5k background samples! For better performance consider using smaller random sample.")
             if not tf.executing_eagerly():
-                self.expected_value = self.run(self.model_output, self.model_inputs, self.data).mean(0)
+                self.session.run(tf.global_variables_initializer())
+                self.expected_value = self.run(self.model_output, self.model_inputs, self.data, self.additional_feed_dict).mean(0)
             else:
                 self.expected_value = tf.reduce_mean(self.model(self.data), 0)
 
@@ -255,7 +257,7 @@ class TFDeepExplainer(Explainer):
 
         # rank and determine the model outputs that we will explain
         if ranked_outputs is not None and self.multi_output:
-            model_output_values = self.run(self.model_output, self.model_inputs, X)
+            model_output_values = self.run(self.model_output, self.model_inputs, X, self.additional_feed_dict)
             if output_rank_order == "max":
                 model_output_ranks = np.argsort(-model_output_values)
             elif output_rank_order == "min":
@@ -290,7 +292,7 @@ class TFDeepExplainer(Explainer):
 
                 # run attribution computation graph
                 feature_ind = model_output_ranks[j,i]
-                sample_phis = self.run(self.phi_symbolic(feature_ind), self.model_inputs, joint_input)
+                sample_phis = self.run(self.phi_symbolic(feature_ind), self.model_inputs, joint_input, self.additional_feed_dict)
 
                 # assign the attributions to the right part of the output arrays
                 for l in range(len(X)):
@@ -301,7 +303,7 @@ class TFDeepExplainer(Explainer):
         # check that the SHAP values sum up to the model output
         if check_additivity:
             if not tf.executing_eagerly():
-                model_output = self.run(self.model_output, self.model_inputs, X)
+                model_output = self.run(self.model_output, self.model_inputs, X, self.additional_feed_dict)
             else:
                 model_output = self.model(X)
             for l in range(len(self.expected_value)):
@@ -320,13 +322,15 @@ class TFDeepExplainer(Explainer):
         else:
             return output_phis
 
-    def run(self, out, model_inputs, X):
+    def run(self, out, model_inputs, X, additional_feed_dict):
         """ Runs the model while also setting the learning phase flags to False.
         """
         if not tf.executing_eagerly():
             feed_dict = dict(zip(model_inputs, X))
             for t in self.learning_phase_flags:
                 feed_dict[t] = False
+            if additional_feed_dict is not None:
+                feed_dict.update(additional_feed_dict)
             return self.session.run(out, feed_dict)
         else:
             def anon():
